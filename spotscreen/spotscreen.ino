@@ -103,52 +103,64 @@ void startServer() {
 }
 
 bool connectWIFI(const char* ssid, const char* pass) {
-  display.clearDisplay();
-  display.println("Connecting...");
-  display.display();
-  WiFi.begin(ssid, pass);
-  delay(5000);
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("Successfully connected to network ");
-    Serial.println(WiFi.SSID());
-    return true;
-  } 
-  else {
-    Serial.println("Failed to connect to a WiFi network.");
-    return false;
-  }
+    display.clearDisplay();
+    display.println("Connecting...");
+    display.display();
+    
+    WiFi.begin(ssid, pass);
+    unsigned long startAttemptTime = millis();
 
-  return false; // Shouldn't execute this row.
+    // Wait for connection with a timeout
+    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 15000) {
+        delay(500); // Poll every 500ms
+        Serial.print(".");
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.print("Successfully connected to network: ");
+        Serial.println(WiFi.SSID());
+        return true;
+    } else {
+        Serial.println("Failed to connect to a WiFi network.");
+        return false;
+    }
 }
+
 
 void exchangeCodeForToken(String authCode, String codeVerifier, String clientId, String redirectUri) {
     HTTPClient http;
     http.begin("https://accounts.spotify.com/api/token");
     http.addHeader("Content-Type", "application/x-www-form-urlencoded");
 
-    String postData = "client_id=" + clientId;
-    postData += "&grant_type=authorization_code";
-    postData += "&code=" + authCode;
-    postData += "&redirect_uri=" + redirectUri;
-    postData += "&code_verifier=" + codeVerifier;
+    // Construct POST data
+    String postData = "client_id=" + clientId +
+                      "&grant_type=authorization_code" +
+                      "&code=" + authCode +
+                      "&redirect_uri=" + redirectUri +
+                      "&code_verifier=" + codeVerifier;
 
+    Serial.println("Sending POST request...");
     Serial.println(postData);
-    
+
+    // Make the HTTP request
     int httpResponseCode = http.POST(postData);
     String response = http.getString();
+
     if (httpResponseCode == 200) {
-        DynamicJsonDocument doc(512);
-        DeserializationError error =  deserializeJson(doc, response);
+        DynamicJsonDocument doc(1024);
+        DeserializationError error = deserializeJson(doc, response);
+
         if (error) {
             Serial.print(F("deserializeJson() failed: "));
             Serial.println(error.c_str());
             return;
         }
+
         accessToken = doc["access_token"].as<String>();
         String tokenType = doc["token_type"].as<String>();
         int expiresIn = doc["expires_in"].as<int>();
 
-        Serial.println("Access Token: " + accessToken);
+        Serial.println("Access Token retrieved successfully.");
         Serial.println("Token Type: " + tokenType);
         Serial.println("Expires In: " + String(expiresIn));
 
@@ -160,14 +172,16 @@ void exchangeCodeForToken(String authCode, String codeVerifier, String clientId,
     http.end();
 }
 
+
 void setupOLED() {
   display.setTextSize(1);
   display.setTextColor(WHITE);
-  display.setCursor(0, 0);
+  display.setCursor(0, 10);
   display.clearDisplay();
 }
 
 String fetchCurrentTrack() {
+
     if (accessToken == "") {
         return "No Access Token";
     }
@@ -191,7 +205,7 @@ String fetchCurrentTrack() {
 
         String trackName = doc["item"]["name"].as<String>();
         String artistName = doc["item"]["artists"][0]["name"].as<String>();
-        return artistName + ":" + trackName;
+        return artistName + "\n" + trackName;
 
     } else {
         Serial.printf("Error in HTTP request, code: %d\n", httpResponseCode);
@@ -204,61 +218,62 @@ String fetchCurrentTrack() {
 void displayCurrentTrack() {
     String currentTrack = fetchCurrentTrack();
     display.clearDisplay();
-    display.setCursor(0, 0);
-    display.println(currentTrack.substring(0, SCREEN_WIDTH / 6));  // Display first part of the track
+    display.setCursor(0, 10);
+    display.println(currentTrack);  // Display first part of the track
     display.display();
 }
 
 void setup() {
-  Serial.begin(115200);
-  Serial.println("Starting device...");
+    Serial.begin(115200);
+    Serial.println("Starting device...");
 
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println(F("SSD1306 allocation failed"));
-    for (;;);
-  }
+    // Check display init
+    if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+        Serial.println(F("SSD1306 allocation failed"));
+        for (;;);
+    }
 
-  setupOLED();
+    setupOLED();
 
-  // Connect to wifi
-  Serial.println("Waiting for Wifi to connect...");
-  if (!connectWIFI(SECRET_SSID, SECRET_PASS)) {
-    Serial.println("Wifi connection failed.");
+    // Connect to wifi
+    Serial.println("Waiting for Wifi to connect...");
+    if (!connectWIFI(SECRET_SSID, SECRET_PASS)) {
+        Serial.println("Wifi connection failed.");
+        display.clearDisplay();
+        display.println("Connection fail.");
+        display.display();
+        for (;;);
+    } 
+    else {
+        display.clearDisplay();
+        display.println("Connected to ");
+        display.println(String(WiFi.SSID()));
+        display.display();
+    }
+    startServer();
+
+    String codeVerifier = generateCodeVerifier();
+    String codeChallenge = generateCodeChallenge(codeVerifier);
+    String authURL = generateAuthURL(clientId, redirectUri, codeChallenge);
+    Serial.println("Visit this URL to authorize: " + authURL);
+
+    Serial.println("Enter the authorization code: ");
+    while (Serial.available() == 0) {} // Wait for user input
+    String authCode = Serial.readStringUntil('\n');
+    
+    // Display the URL on the OLED screen as well 
     display.clearDisplay();
-    display.println("Connection fail.");
+    display.println("Open URL:");
+    display.println(authURL.substring(0, SCREEN_WIDTH / 6));  // Print part of the URL
     display.display();
-    for (;;);
-  } 
-  else {
+
+    // Wait for the user to visit the URL and provide the authorization code manually
+    // Replace this part with actual code to input the authorization code
+    if (authCode.length() > 0) {
+        exchangeCodeForToken(authCode, codeVerifier, clientId, redirectUri);
+    }
     display.clearDisplay();
-    display.println("Connected to ");
-    display.println(String(WiFi.SSID()));
-    display.display();
-  }
-  startServer();
-
-  String codeVerifier = generateCodeVerifier();
-  String codeChallenge = generateCodeChallenge(codeVerifier);
-  String authURL = generateAuthURL(clientId, redirectUri, codeChallenge);
-  Serial.println("Visit this URL to authorize: " + authURL);
-
-  Serial.println("Enter the authorization code: ");
-  while (Serial.available() == 0) {} // Wait for user input
-  String authCode = Serial.readStringUntil('\n');
-  
-  // Display the URL on the OLED screen as well 
-  display.clearDisplay();
-  display.println("Open URL:");
-  display.println(authURL.substring(0, SCREEN_WIDTH / 6));  // Print part of the URL
-  display.display();
-
-  // Wait for the user to visit the URL and provide the authorization code manually
-  // Replace this part with actual code to input the authorization code
-  if (authCode.length() > 0) {
-      exchangeCodeForToken(authCode, codeVerifier, clientId, redirectUri);
-  }
-  display.clearDisplay();
-  displayCurrentTrack();
+    displayCurrentTrack();
 }
 
 void loop() {
