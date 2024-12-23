@@ -8,17 +8,19 @@
 #include <Adafruit_SSD1306.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/sha256.h>
+#include <qrcode_gen.h>
 
 #include "secrets.h"
+#include "WebServerHandler.hh"
+
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 
-WebServer server(80);
-String serverHeader;
+WebServerHandler webServerHandler;
+
 unsigned long currentTime = millis();
 unsigned long previousTime = 0;
-// 2000ms = 2s
 const long timeoutTime = 2000;
 
 String clientId = "cd421c13a2db4851a6b45d4a07f47183";
@@ -33,31 +35,19 @@ typedef struct s_trackInfo  {
   String trackName;
 } trackInfo;
 
-void handleRoot() {
-    server.send(200, "text/plain", "Server is running!");
-}
-
-void handleCallback() {
-    if (server.hasArg("code")) {
-        authCode = server.arg("code");  // Capture the authorization code
-        server.send(200, "text/plain", "Authorization successful! You can close this window.");
-        Serial.println("Authorization code received: " + authCode);
-    } else {
-        server.send(400, "text/plain", "Authorization code not found.");
-    }
-}
-
-String generateCodeVerifier() {
+String generateCodeVerifier() 
+{
     String codeVerifier = "";
     const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
 
-    for (int i = 0; i < 128; i++) {  // The code verifier should be between 43 and 128 characters
+    for (uint8_t i = 0; i < 128; i++) {  // The code verifier should be between 43 and 128 characters
         codeVerifier += charset[random(0, sizeof(charset) - 1)];
     }
     return codeVerifier;
 }
 
-String generateCodeChallenge(String codeVerifier) {
+String generateCodeChallenge(String codeVerifier) 
+{
     unsigned char sha256Hash[32];
     mbedtls_sha256_context ctx;
     mbedtls_sha256_init(&ctx);
@@ -80,7 +70,8 @@ String generateCodeChallenge(String codeVerifier) {
     return codeChallenge;
 }
 
-String generateAuthURL(String clientId, String redirectUri, String codeChallenge) {
+String generateAuthURL(String clientId, String redirectUri, String codeChallenge) 
+{
     String authURL = "https://accounts.spotify.com/authorize?";
     authURL += "response_type=code";
     authURL += "&client_id=" + clientId;
@@ -91,28 +82,19 @@ String generateAuthURL(String clientId, String redirectUri, String codeChallenge
     return authURL;
 }
 
-void startServer() {
-    Serial.println("");
-    Serial.println("IP Address: ");
-    Serial.println(WiFi.localIP());
-    // Set up URL routes
-    server.on("/", handleRoot);  // Handle the root path
-    server.on("/callback", handleCallback);  // Handle the callback path
-    server.begin();
-    Serial.println("Server started");
-}
-
-bool connectWIFI(const char* ssid, const char* pass) {
+bool connectWIFI(const char* ssid, const char* pass)
+{
     display.clearDisplay();
     display.println("Connecting...");
     display.display();
     
     WiFi.begin(ssid, pass);
     unsigned long startAttemptTime = millis();
+    unsigned int timeout = 15000;
 
     // Wait for connection with a timeout
-    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 15000) {
-        delay(500); // Poll every 500ms
+    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < timeout) {
+        delay(500);
         Serial.print(".");
     }
 
@@ -143,11 +125,11 @@ void exchangeCodeForToken(String authCode, String codeVerifier, String clientId,
     Serial.println(postData);
 
     // Make the HTTP request
-    int httpResponseCode = http.POST(postData);
+    unsigned int httpResponseCode = http.POST(postData);
     String response = http.getString();
 
     if (httpResponseCode == 200) {
-        DynamicJsonDocument doc(1024);
+        DynamicJsonDocument doc(512);
         DeserializationError error = deserializeJson(doc, response);
 
         if (error) {
@@ -158,7 +140,7 @@ void exchangeCodeForToken(String authCode, String codeVerifier, String clientId,
 
         accessToken = doc["access_token"].as<String>();
         String tokenType = doc["token_type"].as<String>();
-        int expiresIn = doc["expires_in"].as<int>();
+        unsigned int expiresIn = doc["expires_in"].as<int>();
 
         Serial.println("Access Token retrieved successfully.");
         Serial.println("Token Type: " + tokenType);
@@ -181,8 +163,7 @@ void setupOLED() {
 }
 
 String fetchCurrentTrack() {
-
-    if (accessToken == "") {
+    if (accessToken.isEmpty()) {
         return "No Access Token";
     }
 
@@ -190,11 +171,11 @@ String fetchCurrentTrack() {
     http.begin("https://api.spotify.com/v1/me/player/currently-playing");
     http.addHeader("Authorization", "Bearer " + accessToken);
 
-    int httpResponseCode = http.GET();
+    unsigned int httpResponseCode = http.GET();
     String response = http.getString();
 
     if (httpResponseCode == 200) {
-        DynamicJsonDocument doc(1024);
+        DynamicJsonDocument doc(512);
         DeserializationError error = deserializeJson(doc, response);
 
         if (error) {
@@ -203,16 +184,14 @@ String fetchCurrentTrack() {
             return "Error";
         }
 
-        String trackName = doc["item"]["name"].as<String>();
-        String artistName = doc["item"]["artists"][0]["name"].as<String>();
-        return artistName + "\n" + trackName;
-
+        const char* trackName = doc["item"]["name"] | "Unknown Track";
+        const char* artistName = doc["item"]["artists"][0]["name"] | "Unknown Artist";
+        
+        return String(artistName) + "\n" + String(trackName);
     } else {
-        Serial.printf("Error in HTTP request, code: %d\n", httpResponseCode);
+        Serial.printf("HTTP Error: %d\n", httpResponseCode);
         return "No Track Playing";
     }
-
-    http.end();
 }
 
 void displayCurrentTrack() {
@@ -222,6 +201,50 @@ void displayCurrentTrack() {
     display.println(currentTrack);  // Display first part of the track
     display.display();
 }
+
+void printQRCode(String url) {
+    // The structure to manage the QR code
+    QRCode qrcode;
+
+    // Allocate a chunk of memory to store the QR code
+    uint8_t qrcodeBytes[qrcode_getBufferSize(11)];
+        
+    // Initialize QR code with the URL
+    qrcode_initText(&qrcode, qrcodeBytes, 11, ECC_LOW, url.c_str());
+
+    // Clear the display
+    display.clearDisplay();
+    display.fillScreen(WHITE);
+
+    // Calculate the size of each QR code module (pixel)
+    // This ensures the QR code fits on the screen
+    unsigned int moduleSize = min(SCREEN_WIDTH / qrcode.size, SCREEN_HEIGHT / qrcode.size);
+
+    // Calculate offsets to center the QR code
+    uint8_t offsetX = (SCREEN_WIDTH - (qrcode.size * moduleSize)) / 2;
+    uint8_t offsetY = (SCREEN_HEIGHT - (qrcode.size * moduleSize)) / 2;
+
+    // Render the QR code
+    for (uint8_t y = 0; y < qrcode.size; y++) {
+        for (uint8_t x = 0; x < qrcode.size; x++) {
+            // Check if the module is black
+            if (qrcode_getModule(&qrcode, x, y)) {
+                // Draw a filled square for black modules
+                display.fillRect(
+                    offsetX + x * moduleSize, 
+                    offsetY + y * moduleSize, 
+                    moduleSize, 
+                    moduleSize, 
+                    BLACK
+                );
+            }
+        }
+    }
+
+    // Update the display87
+    display.display();
+}
+
 
 void setup() {
     Serial.begin(115200);
@@ -250,21 +273,22 @@ void setup() {
         display.println(String(WiFi.SSID()));
         display.display();
     }
-    startServer();
+
+    // Start web server
+    webServerHandler.begin();
 
     String codeVerifier = generateCodeVerifier();
     String codeChallenge = generateCodeChallenge(codeVerifier);
     String authURL = generateAuthURL(clientId, redirectUri, codeChallenge);
-    Serial.println("Visit this URL to authorize: " + authURL);
+    printQRCode(authURL);
 
+    Serial.println("Visit this URL to authorize: " + authURL);
     Serial.println("Enter the authorization code: ");
     while (Serial.available() == 0) {} // Wait for user input
     String authCode = Serial.readStringUntil('\n');
     
-    // Display the URL on the OLED screen as well 
     display.clearDisplay();
     display.println("Open URL:");
-    display.println(authURL.substring(0, SCREEN_WIDTH / 6));  // Print part of the URL
     display.display();
 
     // Wait for the user to visit the URL and provide the authorization code manually
@@ -277,11 +301,13 @@ void setup() {
 }
 
 void loop() {
-    // put your main code here, to run repeatedly:
-    server.handleClient();
-    if (millis() - previousTime >= 5000) {  // Update every 5 seconds
-    displayCurrentTrack();
-    previousTime = millis();
-    }
+    // Handle web server client requests
+    webServerHandler.handleClient();
 
+    // Update track display every 5 seconds
+    static unsigned long previousTime = 0;
+    if (millis() - previousTime >= 5000) {  
+        displayCurrentTrack();
+        previousTime = millis();
+    }
 }
