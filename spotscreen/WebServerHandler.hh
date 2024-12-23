@@ -1,5 +1,5 @@
-#ifndef WEBSERVER_HANDLER_H
-#define WEBDRIVER_HANDLER_H
+#ifndef WEBSERVERHANDLER_HH
+#define WEBSERVERHANDLER_HH
 
 #include <WebServer.h>
 #include <WiFi.h>
@@ -12,6 +12,7 @@ public:
     void handleClient();
     String getAuthorizationCode();
     bool isAuthorizationReceived();
+    void clearAuthorizationReceived();
 
 private:
     WebServer server;
@@ -24,4 +25,4 @@ private:
     void handleNotFound();
 };
 
-#endif // WEBSERVER_HANDLER_H
+#endif // WEBSERVERHANDLER_HH
