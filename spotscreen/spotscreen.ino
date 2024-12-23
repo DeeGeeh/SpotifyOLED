@@ -23,8 +23,7 @@ unsigned long currentTime = millis();
 unsigned long previousTime = 0;
 const long timeoutTime = 2000;
 
-String clientId = "cd421c13a2db4851a6b45d4a07f47183";
-String redirectUri = "http%3A%2F%2Fhttpbin.org%2Fanything";  // redirect link -> http://httpbin.org/anything
+String redirectUri;
 String authCode = "";
 String accessToken = "";
 
@@ -277,37 +276,47 @@ void setup() {
     // Start web server
     webServerHandler.begin();
 
+    IPAddress ip = WiFi.localIP();
+    redirectUri = "http%3A%2F%2F" + ip.toString();
+    redirectUri += "%2Fcallback";
+
     String codeVerifier = generateCodeVerifier();
     String codeChallenge = generateCodeChallenge(codeVerifier);
-    String authURL = generateAuthURL(clientId, redirectUri, codeChallenge);
+    String authURL = generateAuthURL(SECRET_CLIENT_ID, redirectUri, codeChallenge);
+
     printQRCode(authURL);
-
     Serial.println("Visit this URL to authorize: " + authURL);
-    Serial.println("Enter the authorization code: ");
-    while (Serial.available() == 0) {} // Wait for user input
-    String authCode = Serial.readStringUntil('\n');
-    
-    display.clearDisplay();
-    display.println("Open URL:");
-    display.display();
+    Serial.println("OR");
+    Serial.println("Scan QR code to authorize.");
 
-    // Wait for the user to visit the URL and provide the authorization code manually
-    // Replace this part with actual code to input the authorization code
+
+     // Wait for authorization
+    while (authCode.length() == 0) {
+        webServerHandler.handleClient();
+        if (webServerHandler.isAuthorizationReceived()) {
+            authCode = webServerHandler.getAuthorizationCode();
+            break;
+        }
+        delay(100);  // Prevent watchdog reset
+    }
+
+    // Only proceed once we have the auth code
     if (authCode.length() > 0) {
-        exchangeCodeForToken(authCode, codeVerifier, clientId, redirectUri);
+        exchangeCodeForToken(authCode, codeVerifier, SECRET_CLIENT_ID, redirectUri);
     }
     display.clearDisplay();
     displayCurrentTrack();
 }
 
 void loop() {
-    // Handle web server client requests
-    webServerHandler.handleClient();
-
-    // Update track display every 5 seconds
-    static unsigned long previousTime = 0;
-    if (millis() - previousTime >= 5000) {  
-        displayCurrentTrack();
-        previousTime = millis();
+    // Only update display if we're authenticated
+    if (accessToken.length() > 0) {
+        webServerHandler.handleClient();
+        
+        static unsigned long previousTime = 0;
+        if (millis() - previousTime >= 5000) {  
+            displayCurrentTrack();
+            previousTime = millis();
+        }
     }
 }
