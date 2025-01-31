@@ -7,3 +7,5 @@ Basically a mp3 player...
 - Separate into separate source/header files. 
 - Play/pause/skip buttons.
 - 3D print a casing.
+
+<img src="https://github.com/user-attachments/assets/bc70c3f9-0716-47cb-994f-8ba69640b0f6" alt="Spotify OLED" width="500">
